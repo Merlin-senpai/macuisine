@@ -1,0 +1,99 @@
+name: DevSecOps Security & Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  security-and-deploy:
+    name: 🔐 Security Scan + 🚀 Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      # =========================
+      # 1️⃣ Checkout Repository
+      # =========================
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # =========================
+      # 2️⃣ Setup Node
+      # =========================
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      # =========================
+      # 3️⃣ Install Dependencies
+      # =========================
+      - name: Install dependencies
+        run: npm ci
+
+      # =========================
+      # 4️⃣ Install jq (for JSON parsing)
+      # =========================
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # =========================
+      # 5️⃣ Run NPM Audit + Generate HTML Report
+      # =========================
+      - name: 🔍 Run npm audit
+        run: |
+          npm install -g npm-audit-html
+
+          # Run audit safely (prevent auto-failure)
+          npm audit --json > audit.json || true
+
+          # Generate readable report
+          npm-audit-html -i audit.json -o security-report.html
+
+          # Extract critical vulnerabilities safely
+          CRITICAL=$(jq '.metadata.vulnerabilities.critical // 0' audit.json)
+
+          echo "Critical vulnerabilities detected: $CRITICAL"
+
+          # Fail only if critical > 0
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "🚨 Critical vulnerabilities found!"
+            exit 1
+          fi
+
+      # =========================
+      # 6️⃣ Install & Run Snyk
+      # =========================
+      - name: 🔐 Install Snyk
+        run: npm install -g snyk
+
+      - name: 🔐 Run Snyk Test
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk auth $SNYK_TOKEN
+          snyk test --severity-threshold=high || true
+          snyk test --json > snyk-report.json || true
+
+      # =========================
+      # 7️⃣ Upload Security Report
+      # =========================
+      - name: 📤 Upload Security Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.html
+
+      # =========================
+      # 8️⃣ Deploy to Vercel (Main Branch Only)
+      # =========================
+      - name: 🚀 Deploy to Vercel
+        if: github.ref == 'refs/heads/main'
+        run: |
+          npm install -g vercel
+          vercel --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
